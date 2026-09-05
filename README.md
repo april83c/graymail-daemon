@@ -90,10 +90,25 @@ cp .env.example .env
 docker compose up -d
 ```
 
+## Backfill existing mail
+
+After setting up your sieve script, you can retroactively move all existing inbox messages that match the header-based rules (`List-Unsubscribe`, `Auto-Submitted`, `Precedence: bulk/list/junk`) into Graymail:
+
+```sh
+# Preview what would be moved
+docker compose run --rm graymail-daemon bun run backfill -- --dry-run
+
+# Move them
+docker compose run --rm graymail-daemon bun run backfill
+```
+
+This only needs to be run once — the sieve filter handles future mail automatically.
+
 ## Development
 
 ```sh
 bun install
 bun run start
-bun run check  # type-check
+bun run backfill  # one-off inbox scan
+bun run check     # type-check
 ```

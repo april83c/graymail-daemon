@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "start": "bun run src/index.ts",
+    "backfill": "bun run src/backfill.ts",
     "check": "tsc --noEmit"
   },
   "dependencies": {
