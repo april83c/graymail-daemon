@@ -1,0 +1,5 @@
+services:
+  graymail-daemon:
+    image: ghcr.io/april83c/graymail-daemon:latest
+    restart: unless-stopped
+    env_file: .env
