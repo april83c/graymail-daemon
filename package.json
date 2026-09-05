@@ -7,7 +7,9 @@
     "check": "tsc --noEmit"
   },
   "dependencies": {
-    "imapflow": "^1.0.171"
+    "@t3-oss/env-core": "^0.13.11",
+    "imapflow": "^1.0.171",
+    "zod": "^4.5.4"
   },
   "devDependencies": {
     "@types/bun": "^1.2.14",

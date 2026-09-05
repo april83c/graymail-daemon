@@ -1,5 +1,5 @@
 import { ImapFlow } from "imapflow";
-import { config } from "./config";
+import { env } from "./env";
 import { SieveClient } from "./sieve-client";
 import { updateSieveScript } from "./sieve";
 
@@ -7,12 +7,12 @@ async function tick(): Promise<void> {
   console.log("[tick] Checking for new graymail senders...");
 
   const imap = new ImapFlow({
-    host: config.imap.host,
-    port: config.imap.port,
-    secure: config.imap.secure,
+    host: env.IMAP_HOST,
+    port: env.IMAP_PORT,
+    secure: env.IMAP_TLS === "true",
     auth: {
-      user: config.mail.user,
-      pass: config.mail.pass,
+      user: env.MAIL_USER,
+      pass: env.MAIL_PASS,
     },
     logger: false,
   });
@@ -22,8 +22,7 @@ async function tick(): Promise<void> {
 
     const senders = new Set<string>();
 
-    // Check Graymail/Add for messages
-    let lock = await imap.getMailboxLock(config.graymailAddFolder);
+    let lock = await imap.getMailboxLock(env.GRAYMAIL_ADD_FOLDER);
     try {
       if (!imap.mailbox || imap.mailbox.exists === 0) {
         console.log("[tick] No messages in Graymail/Add");
@@ -44,31 +43,30 @@ async function tick(): Promise<void> {
         `[tick] Found ${senders.size} sender(s): ${[...senders].join(", ")}`,
       );
 
-      await imap.messageMove("1:*", config.graymailFolder);
+      await imap.messageMove("1:*", env.GRAYMAIL_FOLDER);
       console.log("[tick] Moved messages from Graymail/Add to Graymail");
     } finally {
       lock.release();
     }
 
-    // Update sieve filter
     const sieve = new SieveClient();
     try {
       await sieve.connect(
-        config.sieve.host,
-        config.sieve.port,
-        config.sieve.security,
+        env.SIEVE_HOST,
+        env.SIEVE_PORT,
+        env.SIEVE_SECURITY,
       );
-      await sieve.authenticate(config.mail.user, config.mail.pass);
+      await sieve.authenticate(env.MAIL_USER, env.MAIL_PASS);
 
-      const script = await sieve.getScript(config.sieve.scriptName);
+      const script = await sieve.getScript(env.SIEVE_SCRIPT_NAME);
       const updated = updateSieveScript(
         script,
         [...senders],
-        config.graymailFolder,
+        env.GRAYMAIL_FOLDER,
       );
 
       if (updated !== script) {
-        await sieve.putScript(config.sieve.scriptName, updated);
+        await sieve.putScript(env.SIEVE_SCRIPT_NAME, updated);
         console.log("[tick] Updated sieve script");
       } else {
         console.log("[tick] Sieve script already up to date");
@@ -80,14 +78,12 @@ async function tick(): Promise<void> {
       sieve.destroy();
     }
 
-    // Move existing inbox messages from those senders
-    lock = await imap.getMailboxLock(config.inboxFolder);
+    lock = await imap.getMailboxLock(env.INBOX_FOLDER);
     try {
       for (const sender of senders) {
         const found = await imap.search({ from: sender });
         if (!found || found.length === 0) continue;
 
-        // IMAP SEARCH FROM is a substring match, so verify exact address
         const toMove: number[] = [];
         for await (const msg of imap.fetch(found, { envelope: true })) {
           if (msg.envelope?.from?.[0]?.address?.toLowerCase() === sender) {
@@ -96,7 +92,7 @@ async function tick(): Promise<void> {
         }
 
         if (toMove.length > 0) {
-          await imap.messageMove(toMove, config.graymailFolder, {
+          await imap.messageMove(toMove, env.GRAYMAIL_FOLDER, {
             uid: true,
           });
           console.log(
@@ -117,10 +113,10 @@ async function tick(): Promise<void> {
 
 async function main(): Promise<void> {
   console.log("graymail-daemon starting");
-  console.log(`  IMAP: ${config.imap.host}:${config.imap.port}`);
-  console.log(`  Sieve: ${config.sieve.host}:${config.sieve.port}`);
-  console.log(`  Poll interval: ${config.pollIntervalSeconds}s`);
-  console.log(`  Watching: ${config.graymailAddFolder}`);
+  console.log(`  IMAP: ${env.IMAP_HOST}:${env.IMAP_PORT}`);
+  console.log(`  Sieve: ${env.SIEVE_HOST}:${env.SIEVE_PORT}`);
+  console.log(`  Poll interval: ${env.POLL_INTERVAL_SECONDS}s`);
+  console.log(`  Watching: ${env.GRAYMAIL_ADD_FOLDER}`);
 
   while (true) {
     try {
@@ -129,7 +125,7 @@ async function main(): Promise<void> {
       console.error("Unhandled error:", err);
     }
 
-    await Bun.sleep(config.pollIntervalSeconds * 1000);
+    await Bun.sleep(env.POLL_INTERVAL_SECONDS * 1000);
   }
 }
 
