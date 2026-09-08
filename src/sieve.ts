@@ -1,13 +1,21 @@
-const BEGIN_MARKER = "# GRAYMAIL-BEGIN";
-const END_MARKER = "# GRAYMAIL-END";
+const GRAYMAIL_BEGIN = "# GRAYMAIL-BEGIN";
+const GRAYMAIL_END = "# GRAYMAIL-END";
+const ALLOW_BEGIN = "# GRAYMAIL-ALLOW-BEGIN";
+const ALLOW_END = "# GRAYMAIL-ALLOW-END";
 
-interface GraymailAddresses {
+interface Addresses {
   exact: string[];
   domains: string[];
 }
 
-function parseSieveBlock(block: string): GraymailAddresses {
-  const result: GraymailAddresses = { exact: [], domains: [] };
+interface BlockLocation {
+  addrs: Addresses;
+  beginIdx: number;
+  endIdx: number;
+}
+
+function parseAddresses(block: string): Addresses {
+  const result: Addresses = { exact: [], domains: [] };
 
   const exactMatch = block.match(
     /address\s+:all\s+:is\s+"from"\s+\[([\s\S]*?)\]/,
@@ -30,16 +38,32 @@ function parseSieveBlock(block: string): GraymailAddresses {
   return result;
 }
 
-function generateSieveBlock(
-  addrs: GraymailAddresses,
-  folder: string,
+function findBlock(
+  script: string,
+  begin: string,
+  end: string,
+): BlockLocation | null {
+  const beginIdx = script.indexOf(begin);
+  const endIdx = script.indexOf(end);
+  if (beginIdx === -1 || endIdx === -1) return null;
+
+  const endMarkerEnd = endIdx + end.length;
+  const block = script.substring(beginIdx, endMarkerEnd);
+
+  return { addrs: parseAddresses(block), beginIdx, endIdx: endMarkerEnd };
+}
+
+function generateBlock(
+  addrs: Addresses,
+  begin: string,
+  end: string,
+  bodyLines: string[],
 ): string {
   if (addrs.exact.length === 0 && addrs.domains.length === 0) {
-    return `${BEGIN_MARKER}\n${END_MARKER}`;
+    return `${begin}\n${end}`;
   }
 
-  const needsAnyof =
-    addrs.exact.length > 0 && addrs.domains.length > 0;
+  const needsAnyof = addrs.exact.length > 0 && addrs.domains.length > 0;
   const indent = needsAnyof ? "    " : "  ";
   const closingIndent = needsAnyof ? "  " : "";
 
@@ -66,48 +90,105 @@ function generateSieveBlock(
     test = conditions[0].trimStart();
   }
 
-  return [
-    BEGIN_MARKER,
-    `if ${test} {`,
-    `  fileinto :create "${folder}";`,
-    "  stop;",
-    "}",
-    END_MARKER,
-  ].join("\n");
+  return [begin, `if ${test} {`, ...bodyLines.map((l) => `  ${l}`), "}", end].join(
+    "\n",
+  );
+}
+
+function replaceBlock(
+  script: string,
+  loc: BlockLocation,
+  newBlock: string,
+): string {
+  return (
+    script.substring(0, loc.beginIdx) + newBlock + script.substring(loc.endIdx)
+  );
+}
+
+export interface SieveChanges {
+  graymailAdd?: string[];
+  graymailRemove?: string[];
+  allowAdd?: string[];
 }
 
 export function updateSieveScript(
   script: string,
-  newAddresses: string[],
+  changes: SieveChanges,
   folder: string,
 ): string {
-  const beginIdx = script.indexOf(BEGIN_MARKER);
-  const endIdx = script.indexOf(END_MARKER);
+  let result = script;
 
-  if (beginIdx === -1 || endIdx === -1) {
-    throw new Error(
-      `Sieve script is missing ${BEGIN_MARKER} / ${END_MARKER} markers`,
-    );
-  }
+  // Allow block (processed first so graymail block indices stay valid when re-parsed)
+  const hasAllowChanges = changes.allowAdd && changes.allowAdd.length > 0;
+  if (hasAllowChanges) {
+    const loc = findBlock(result, ALLOW_BEGIN, ALLOW_END);
+    if (!loc) {
+      throw new Error(
+        `Sieve script is missing ${ALLOW_BEGIN} / ${ALLOW_END} markers`,
+      );
+    }
 
-  const endMarkerEnd = endIdx + END_MARKER.length;
-  const block = script.substring(beginIdx, endMarkerEnd);
+    const existing = new Set(loc.addrs.exact);
+    let changed = false;
+    for (const addr of changes.allowAdd!) {
+      const lower = addr.toLowerCase();
+      if (!existing.has(lower)) {
+        loc.addrs.exact.push(lower);
+        existing.add(lower);
+        changed = true;
+      }
+    }
 
-  const addrs = parseSieveBlock(block);
-
-  const existingSet = new Set(addrs.exact);
-  let changed = false;
-  for (const addr of newAddresses) {
-    const lower = addr.toLowerCase();
-    if (!existingSet.has(lower)) {
-      addrs.exact.push(lower);
-      existingSet.add(lower);
-      changed = true;
+    if (changed) {
+      result = replaceBlock(
+        result,
+        loc,
+        generateBlock(loc.addrs, ALLOW_BEGIN, ALLOW_END, ["stop;"]),
+      );
     }
   }
 
-  if (!changed) return script;
+  // Graymail block (re-find on potentially updated script)
+  const gLoc = findBlock(result, GRAYMAIL_BEGIN, GRAYMAIL_END);
+  if (!gLoc) {
+    throw new Error(
+      `Sieve script is missing ${GRAYMAIL_BEGIN} / ${GRAYMAIL_END} markers`,
+    );
+  }
 
-  const newBlock = generateSieveBlock(addrs, folder);
-  return script.substring(0, beginIdx) + newBlock + script.substring(endMarkerEnd);
+  let gChanged = false;
+
+  if (changes.graymailAdd && changes.graymailAdd.length > 0) {
+    const existing = new Set(gLoc.addrs.exact);
+    for (const addr of changes.graymailAdd) {
+      const lower = addr.toLowerCase();
+      if (!existing.has(lower)) {
+        gLoc.addrs.exact.push(lower);
+        existing.add(lower);
+        gChanged = true;
+      }
+    }
+  }
+
+  if (changes.graymailRemove && changes.graymailRemove.length > 0) {
+    const removeSet = new Set(
+      changes.graymailRemove.map((a) => a.toLowerCase()),
+    );
+    const before = gLoc.addrs.exact.length;
+    gLoc.addrs.exact = gLoc.addrs.exact.filter((a) => !removeSet.has(a));
+    if (gLoc.addrs.exact.length !== before) gChanged = true;
+  }
+
+  if (gChanged) {
+    result = replaceBlock(
+      result,
+      gLoc,
+      generateBlock(gLoc.addrs, GRAYMAIL_BEGIN, GRAYMAIL_END, [
+        `fileinto :create "${folder}";`,
+        "stop;",
+      ]),
+    );
+  }
+
+  return result;
 }

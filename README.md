@@ -4,19 +4,30 @@ Automatically manages graymail (newsletters, notifications, bulk email) by learn
 
 ## How it works
 
+**Deny flow:**
 1. Move an unwanted email into the `Graymail/Add` IMAP folder
 2. The daemon picks it up, adds the sender to your ManageSieve filter
 3. Future emails from that sender are automatically sorted to `Graymail`
 4. Existing emails from that sender in your inbox are moved to `Graymail` too
 
+**Allow flow:**
+1. Move a wrongly-filtered email into the `Graymail/Allow` IMAP folder
+2. The daemon picks it up, adds the sender to the sieve allow block
+3. That sender now bypasses the header-based rules (List-Unsubscribe, etc.)
+4. The sender is removed from the deny block if present
+5. Existing emails from that sender in `Graymail` are moved back to your inbox
+
 ## Setup
 
 ### 1. Set up your sieve script
 
-Add this to your sieve script (via Roundcube, your mail panel, etc.). The daemon only modifies the section between the `# GRAYMAIL-BEGIN` and `# GRAYMAIL-END` markers — everything else is yours.
+Add this to your sieve script (via Roundcube, your mail panel, etc.). The daemon only modifies the sections between the marker comments — everything else is yours.
 
 ```sieve
 require ["fileinto", "mailbox"];
+
+# GRAYMAIL-ALLOW-BEGIN
+# GRAYMAIL-ALLOW-END
 
 # Catch common bulk mail patterns
 if anyof (
@@ -32,9 +43,21 @@ if anyof (
 # GRAYMAIL-END
 ```
 
-You can pre-populate the managed section with addresses or domains:
+The allow block must come **before** the header rules so that allowed senders bypass them. The deny block comes after.
+
+You can pre-populate the managed sections with addresses or domains:
 
 ```sieve
+# GRAYMAIL-ALLOW-BEGIN
+if address :all :is "from" [
+  "important@example.com"
+] {
+  stop;
+}
+# GRAYMAIL-ALLOW-END
+
+# ... header rules ...
+
 # GRAYMAIL-BEGIN
 if anyof (
   address :all :is "from" [
@@ -55,10 +78,11 @@ The daemon adds individual sender addresses (`address :all :is "from"`) and pres
 
 ### 2. Create the IMAP folders
 
-Create two folders in your mail client:
+Create three folders in your mail client:
 
 - **Graymail** — where graymail is delivered
-- **Graymail/Add** — drop emails here to train the filter
+- **Graymail/Add** — drop emails here to train the filter (deny)
+- **Graymail/Allow** — drop emails here to allowlist a sender
 
 ### 3. Configure
 
@@ -81,7 +105,8 @@ cp .env.example .env
 | `MAIL_PASS` | yes | | Email account password |
 | `POLL_INTERVAL_SECONDS` | | `300` | How often to check (seconds) |
 | `GRAYMAIL_FOLDER` | | `Graymail` | Destination folder |
-| `GRAYMAIL_ADD_FOLDER` | | `Graymail/Add` | Folder to watch |
+| `GRAYMAIL_ADD_FOLDER` | | `Graymail/Add` | Folder to watch for deny |
+| `GRAYMAIL_ALLOW_FOLDER` | | `Graymail/Allow` | Folder to watch for allow |
 | `INBOX_FOLDER` | | `INBOX` | Inbox folder name |
 
 ### 4. Run

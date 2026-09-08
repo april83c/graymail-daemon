@@ -18,6 +18,7 @@ export const env = createEnv({
     POLL_INTERVAL_SECONDS: z.coerce.number().min(10).default(300),
     GRAYMAIL_FOLDER: z.string().default("Graymail"),
     GRAYMAIL_ADD_FOLDER: z.string().default("Graymail/Add"),
+    GRAYMAIL_ALLOW_FOLDER: z.string().default("Graymail/Allow"),
     INBOX_FOLDER: z.string().default("INBOX"),
   },
   runtimeEnv: process.env,
